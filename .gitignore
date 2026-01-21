@@ -1,0 +1,7 @@
+__pycache__
+wandb
+log
+data
+.DS_Store
+data_processing
+sh
