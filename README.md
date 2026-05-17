@@ -72,13 +72,13 @@ Afterward, you can see KnowRare's performance on the test set for the ten rare d
 
 We also provide the trained model weights for each task. You can find them at [Kaggle](https://www.kaggle.com/datasets/mingchengzhu/knowrare-model-weights). Please download them and put them in the "log/{dataset}/{task}/0.1/knowrare/1" directory so that the rest of the code can load them.
 
-### Step 4. Evaluation
-You can evaluate the trained model using the following command:
+### Step 4. Evaluation Only
+You can evaluate saved model weights using the following command:
 ```bash
-python eval.py --algo knowrare --dataset mimic --task mortality_day90
-python eval.py --algo knowrare --dataset mimic --task readmission_day30
-python eval.py --algo knowrare --dataset eicu --task icu_mortality
-python eval.py --algo knowrare --dataset eicu --task remaining_los
+python train_eval.py --algo knowrare --dataset mimic --task mortality_day90 --eval_only
+python train_eval.py --algo knowrare --dataset mimic --task readmission_day30 --eval_only
+python train_eval.py --algo knowrare --dataset eicu --task icu_mortality --eval_only
+python train_eval.py --algo knowrare --dataset eicu --task remaining_los --eval_only
 ```
 
 
@@ -93,8 +93,7 @@ knowrare/
 ├── requirements.txt  # List of dependencies
 ├── pretrain.py       # the pretraining code
 ├── graph_embedding.py  # the graph embedding code
-├── train.py          # the KnowRare Training code
-├── eval.py           # evaluation code
+├── train_eval.py     # the KnowRare training/evaluation entrypoint
 ├── configs/                # configuration directory
 │   ├── algo_config.py      # algorithm configs
 │   └── dataset_config.py   # dataset configs
@@ -138,4 +137,3 @@ This work is licensed under a
 [cc-by-nc-nd]: http://creativecommons.org/licenses/by-nc-nd/4.0/
 [cc-by-nc-nd-image]: https://licensebuttons.net/l/by-nc-nd/4.0/88x31.png
 [cc-by-nc-nd-shield]: https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg
-

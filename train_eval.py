@@ -33,6 +33,7 @@ def get_args():
     parser.add_argument('--device', type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help='device to use for training')
     parser.add_argument("--use_best_hparams", action="store_true", help="whether to use best hparams")
+    parser.add_argument("--eval_only", action="store_true", help="whether to only evaluate saved model weights")
     parser.add_argument("--seed", type=int, default=1, help="random seed")
     return parser.parse_args()
 
@@ -76,11 +77,12 @@ if __name__ == "__main__":
     algo_config.log_dir = log_dir
 
     multi_model_weights_paths = [os.path.join(log_dir, f"model-{rare_icd}.pth") for rare_icd in RARE_ICD_CODES]
-    if all([os.path.exists(weights_path) for weights_path in multi_model_weights_paths]):
+    if not args.eval_only and all([os.path.exists(weights_path) for weights_path in multi_model_weights_paths]):
         print(f"All multi-model weights exist. Skipping this seed.")
         exit()
     
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    if not args.eval_only:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
 
      # init datasetsp
     train_dataset, val_dataset, test_datasets, dataset_info = get_dataset_fn(dataset_config=dataset_config,
@@ -92,14 +94,6 @@ if __name__ == "__main__":
     multi_cls = True if args.task == 'remaining_los' else False
     model = LSTMBasedModel(num_classes=dataset_config.num_classes_dict[dataset_config.label_name], 
                             demo_dims=algo_config.demo_dims, ts_dims=algo_config.ts_dims, multi_cls=multi_cls)
-    # init discriminator
-    icd9_codes = train_dataset[0].get_icd9_codes()
-    num_pred_classes = dataset_config.num_classes_dict[dataset_config.label_name]
-    dis_model = ConditionLinearDiscriminator(num_classes=len(icd9_codes), num_pred_classes=num_pred_classes)
-
-    # load pretrain weights
-    load_pretrain_weights(model, dataset_config, args, algo=args.algo)
-    dis_model.to(args.device)
     model.to(algo_config.device)
 
     # load best hparameters
@@ -107,42 +101,70 @@ if __name__ == "__main__":
     if args.use_best_hparams:
         algo_config = load_best_hparams(algo_config, task=args.task, dataset=args.dataset)
 
-    # train
-    val_result = {}
-    test_result = {}
-    models = []
-    if type(val_dataset) != list:
-        val_dataset = [val_dataset]*len(train_dataset)
-    for _train_dataset, _val_dataset, _dataset_info in zip(train_dataset, val_dataset, dataset_info):
-        _model = deepcopy(model)
-        _dis_model = deepcopy(dis_model)
-        _val_result = knowrare_train_fn(config=algo_config,
-                                        model=_model,
-                                        dis_model=_dis_model,
-                                        train_dataset=_train_dataset,
-                                        val_dataset=_val_dataset,
-                                        write_log=True,
-                                        target_icd9=_dataset_info['target_domain'][0])
-        for metric, value in _val_result.items():
-            val_result[metric] = val_result.get(metric, []) + [value]
-
-        # collect models
-        models.append(_model)
-    
     algo_dir, _ = os.path.split(algo_config.log_dir)
     val_csv_path = f"{algo_dir}/val_result.csv"
     test_csv_path = f"{algo_dir}/test_result.csv"
-    val_result = {metric: np.mean(values) for metric, values in val_result.items()}
-    
-    if not os.path.exists(val_csv_path):
-        val_result_df = pd.DataFrame(val_result, index=[0])
-        val_result_df.to_csv(val_csv_path)
+    models = []
 
-    # get test result
-    try:
-        optimal_cutoff = val_result['optimal_cutoff']
-    except:
-        optimal_cutoff = None
+    if args.eval_only:
+        for _dataset_info in dataset_info:
+            target_icd9 = _dataset_info["target_domain"][0]
+            weights_fpath = os.path.join(log_dir, f"model-{target_icd9}.pth")
+            model.load_state_dict(torch.load(weights_fpath, weights_only=True)["model"])
+            models.append(deepcopy(model))
+
+        if multi_cls:
+            optimal_cutoff = None
+        else:
+            if not os.path.exists(val_csv_path):
+                raise FileNotFoundError(
+                    f"Validation result file is required for eval_only on binary tasks: {val_csv_path}"
+                )
+            val_result_df = pd.read_csv(val_csv_path, index_col=0)
+            if "optimal_cutoff" not in val_result_df.columns:
+                raise ValueError(f"Column 'optimal_cutoff' is missing from {val_csv_path}")
+            optimal_cutoff = val_result_df["optimal_cutoff"].iloc[0]
+    else:
+        # init discriminator
+        icd9_codes = train_dataset[0].get_icd9_codes()
+        num_pred_classes = dataset_config.num_classes_dict[dataset_config.label_name]
+        dis_model = ConditionLinearDiscriminator(num_classes=len(icd9_codes), num_pred_classes=num_pred_classes)
+
+        # load pretrain weights
+        load_pretrain_weights(model, dataset_config, args, algo=args.algo)
+        dis_model.to(args.device)
+
+        # train
+        val_result = {}
+        if type(val_dataset) != list:
+            val_dataset = [val_dataset]*len(train_dataset)
+        for _train_dataset, _val_dataset, _dataset_info in zip(train_dataset, val_dataset, dataset_info):
+            _model = deepcopy(model)
+            _dis_model = deepcopy(dis_model)
+            _val_result = knowrare_train_fn(config=algo_config,
+                                            model=_model,
+                                            dis_model=_dis_model,
+                                            train_dataset=_train_dataset,
+                                            val_dataset=_val_dataset,
+                                            write_log=True,
+                                            target_icd9=_dataset_info['target_domain'][0])
+            for metric, value in _val_result.items():
+                val_result[metric] = val_result.get(metric, []) + [value]
+
+            # collect models
+            models.append(_model)
+
+        val_result = {metric: np.mean(values) for metric, values in val_result.items()}
+
+        if not os.path.exists(val_csv_path):
+            val_result_df = pd.DataFrame(val_result, index=[0])
+            val_result_df.to_csv(val_csv_path)
+
+        try:
+            optimal_cutoff = val_result['optimal_cutoff']
+        except:
+            optimal_cutoff = None
+
     test_result = test_fn(config=algo_config,
                             model=models,
                             test_datasets=test_datasets,
